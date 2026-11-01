@@ -1,0 +1,77 @@
+# Publishes the F-Droid software repository at https://repo.headuck.com/fdroid/repo/
+#
+# This is a *content* repo: the bytes in fdroid/repo/ are committed as-is and
+# must never be regenerated here. The F-Droid index embeds
+# `https://repo.headuck.com/fdroid/repo` in its url attributes, so the path
+# layout below is load-bearing:
+#
+#   fdroid/repo/index.xml  →  https://repo.headuck.com/fdroid/repo/index.xml
+#
+# Do not run `fdroid update` in CI: the signing key and store credentials are
+# deliberately not in this repository, and a re-signed index would break every
+# existing F-Droid client.
+name: Deploy F-Droid repo to Pages
+
+on:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Verify published bytes are the signed repo
+        run: |
+          set -eu
+          test -f fdroid/repo/index-v2.json
+          test -f fdroid/repo/index-v1.jar
+          test -f fdroid/repo/entry.json
+          # The index must keep pointing at repo.headuck.com/fdroid/repo.
+          grep -q 'repo.headuck.com/fdroid/repo' fdroid/repo/index.xml
+          # Nothing oversized for Pages (100 MB per file / 1 GB site).
+          ! find fdroid -type f -size +99M | grep -q .
+          du -sh fdroid
+
+      - name: Stage site (root + /fdroid/repo/)
+        run: |
+          set -eu
+          mkdir -p _site
+          cp .nojekyll index.html 404.html _site/
+          cp -a fdroid _site/fdroid
+          # sanity: the URL clients use must exist in the artifact
+          test -f _site/fdroid/repo/index.xml
+          find _site -maxdepth 2 -type d | sort
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
